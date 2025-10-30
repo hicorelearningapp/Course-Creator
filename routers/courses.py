@@ -27,30 +27,65 @@ router = APIRouter(
     """
 )
 async def create_course(
-    topic: str = Query(..., title="Course Topic", description="Enter the main topic (e.g., Thermodynamics)"),
+    topic: Union[str, List[str]] = Query(..., title="Course Topic", description="Enter the main topic (e.g., Thermodynamics) or a list of topics"),
     use_azure: bool = Query(False, title="Use Azure", description="Set to True to use Azure OpenAI"),
     filename: Optional[str] = Query(None, title="Filename", description="Optional custom filename for saving the course"),
     use_web: bool = Query(False, title="Use Web", description="Set to True to use WebSearchRAG")
 ):
     try:
-        logger.info(f"Creating course for topic: {topic}")
-        course_builder = CourseBuilder(use_azure=use_azure, use_web=use_web)
-        course_data = course_builder.build_topic(topic)
+        # Handle both single topic and list of topics
+        if isinstance(topic, str):
+            topics = [topic]
+            single_topic = True
+        else:
+            topics = topic
+            single_topic = False
+            
+        all_course_data = {}
+        filepaths = []
+        
+        for t in topics:
+            logger.info(f"Creating course for topic: {t}")
+            course_builder = CourseBuilder(use_azure=use_azure, use_web=use_web)
+            course_data = course_builder.build_topic(t)
+            
+            # Generate filename for this topic
+            current_filename = None
+            if filename:
+                if len(topics) > 1:
+                    base, ext = os.path.splitext(filename)
+                    current_filename = f"{base}_{t.lower().replace(' ', '_')}{ext or '.json'}"
+                else:
+                    current_filename = filename
+            
+            # Save the file
+            filepath = course_builder.save_course_to_file(
+                course_data,
+                filename=current_filename or f"{t.lower().replace(' ', '_')}_course.json"
+            )
+            
+            all_course_data[t] = course_data
+            filepaths.append(filepath)
 
-        # Always save the file, use topic as filename if not provided
-        filepath = course_builder.save_course_to_file(
-            course_data, 
-            filename=filename if filename else f"{topic.lower().replace(' ', '_')}_course.json"
-        )
-
-        return {
+        response = {
             "status": "success",
-            "message": "Course created successfully",
-            "topic": topic,
-            "web_search_used":use_web,
-            "filepath": filepath,
-            "course_data": course_data,
+            "message": f"Successfully created course{'s' if not single_topic else ''} for {len(topics)} topic{'s' if len(topics) > 1 else ''}",
+            "topics": topics,
+            "web_search_used": use_web,
+            "filepaths": filepaths[0] if single_topic else filepaths,
         }
+        
+        # For backward compatibility, include single topic response structure
+        if single_topic:
+            response.update({
+                "topic": topics[0],
+                "filepath": filepaths[0],
+                "course_data": all_course_data[topics[0]]
+            })
+        else:
+            response["courses_data"] = all_course_data
+            
+        return response
 
     except Exception as e:
         logger.error(f"Error creating course: {str(e)}")
